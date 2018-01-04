@@ -65,7 +65,7 @@ def spatial_rate_map(x, y, t, sptr, binsize=0.01*pq.m, box_xlen=1*pq.m,
     ix = np.digitize(x, xbins, right=True)
     iy = np.digitize(y, ybins, right=True)
     spike_pos = np.zeros((xbins.size, ybins.size))
-    time_pos = np.zeros((xbins.size, ybins.size))
+    time_pos  = np.zeros((xbins.size, ybins.size))
     for n in range(len(x)):
         spike_pos[ix[n], iy[n]] += spikes_in_bin[n]
         time_pos[ix[n], iy[n]] += time_in_bin[n]
@@ -929,6 +929,11 @@ def optimize_sep_fields(rate_map,step = 0.04, niter=40, T = 1.0, method = 'SLSQP
     return res
 
 
+
+def average_rate(raw_rate_map, fields):
+    """
+    Calculates the average 
+    """
 
 
 if __name__ == "__main__":
