@@ -609,7 +609,7 @@ def get_bump_centers(rate_map, labels, ret_index=False, indices=None, method='ma
 
 
 def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean', 
-        select_by = 'best' , plot=False):
+        select_by = 'best' , plot=False,smooth_acorr=True):
     """Uses autocorrelation and separate_fields to find average distance
     between bumps. Is dependent on high gridness to get separate bumps in
     the autocorrelation
@@ -637,6 +637,11 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
     # autocorrelate. Returns array (2x - 1) the size of rate_map
     acorr = fftcorrelate2d(rate_map,rate_map, mode = 'full', normalize = True)
 
+    if smooth_acorr:
+        from astropy.convolution import Gaussian2DKernel, convolve_fft
+        kernel = Gaussian2DKernel(1)
+        acorr = convolve_fft(acorr, kernel)  
+    
     #acorr[acorr<0] = 0 # TODO Fix this
     f, nf, bump_indices = separate_fields(acorr,laplace_thrsh=thrsh,
             center_method='maxima',cutoff_method=cutoff_method, 
@@ -670,7 +675,7 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
 
     variances = [np.var(distances[mask]) for mask in masks]
     mask = masks[np.argmin(variances)]
-    avg_dist = np.sum(distances[mask])
+    avg_dist = np.mean(distances[mask])
 
     # correct for difference in shapes
     avg_dist *= acorr.shape[0]/rate_map.shape[0] # = 1.98
@@ -678,12 +683,12 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
     # TODO : raise warning if too big difference between points
     if plot:
         import matplotlib.pyplot as plt
-        fig,[ax1,ax2] = plt.subplots(1,2)
+        ax = plt.gca()
 
-        ax1.imshow(acorr,extent  = (0,1,0,1),origin='lower')
-        ax1.scatter(*(bump_centers[:,::-1].T))
-        ax1.contour(f>0, 1, colors='white',extent  = (0,1,0,1),origin='lower')
-        ax1.scatter(*(bump_centers[mask,::-1].T),s=20,c='w')
+        ax.imshow(acorr,extent  = (0,1,0,1),origin='lower')
+        ax.scatter(*(bump_centers[:,::-1].T))
+        ax.contour(f>0, 1, colors='white',extent  = (0,1,0,1),origin='lower')
+        ax.scatter(*(bump_centers[mask,::-1].T),s=20,c='w')
     return avg_dist
 
 
