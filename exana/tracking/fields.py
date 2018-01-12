@@ -473,7 +473,7 @@ def spatial_rate_map_1d(x, t, sptr,
 
 def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         cutoff_method='none', box_xlen=1*pq.m,
-        box_ylen=1*pq.m,index=False):
+        box_ylen=1*pq.m,ret_index=False):
     """Separates fields using the laplacian to identify fields separated by
     a negative second derivative.
 
@@ -566,7 +566,7 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         new[fields == size_sort[i]+1] = i+1
     fields = new
 
-    bc = get_bump_centers(rate_map,labels=fields,ret_index=index,indices=indx,method=center_method,
+    bc = get_bump_centers(rate_map,labels=fields,ret_index=ret_index,indices=indx,method=center_method,
                           units=box_xlen.units)
 
     # TODO exclude fields where maxima is on the edge of the field?
@@ -603,12 +603,13 @@ def get_bump_centers(rate_map, labels, ret_index=False, indices=None, method='ma
             msg = 'ret_index not implemented for gaussian fit'
             raise NotImplementedError(msg)
     if not ret_index and not method=='gaussian_fit':
-        bc = (bc + np.array((0.5,0.5)))/rate_map.shape
-    return np.array(bc)*units
+        bc = (bc + np.array((0.5,0.5)))*units/rate_map.shape
+    return np.array(bc)
 
 
 
-def find_avg_dist(rate_map, thrsh = 0, plot=False):
+def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean', 
+        select_by = 'best' , plot=False):
     """Uses autocorrelation and separate_fields to find average distance
     between bumps. Is dependent on high gridness to get separate bumps in
     the autocorrelation
@@ -637,25 +638,42 @@ def find_avg_dist(rate_map, thrsh = 0, plot=False):
     acorr = fftcorrelate2d(rate_map,rate_map, mode = 'full', normalize = True)
 
     #acorr[acorr<0] = 0 # TODO Fix this
-    f, nf, bump_centers = separate_fields(acorr,laplace_thrsh=thrsh,
-            center_method='maxima',cutoff_method='median')
+    f, nf, bump_indices = separate_fields(acorr,laplace_thrsh=thrsh,
+            center_method='maxima',cutoff_method=cutoff_method, 
+            ret_index = True)
                                          # TODO Find a way to find valid value for
                                          # thrsh, or remove.
 
-    bump_centers = np.array(bump_centers)
+    bump_centers = np.array((bump_indices + np.array((0.5,0.5)))/acorr.shape)
 
     # find dists from center in (autocorrelation)relative units (from 0 to 1)
     distances = np.linalg.norm(bump_centers - (0.5,0.5), axis = 1)
 
     dist_sort = np.argsort(distances)
     distances = distances[dist_sort]
+    bump_centers = bump_centers[dist_sort]
+    bump_indices = bump_indices[dist_sort]
 
+    masks = []
     # use maximum 6 closest values except center value
-    avg_dist = np.median(distances[1:7])
+    if (select_by == 'closest') or (select_by == 'best'):
+        masks.append(slice(1,5))
+    if (select_by == 'value') or (select_by == 'best'):
+        values = acorr[bump_indices.T[0],bump_indices.T[1]]
+        # Threshold is 0.75 times second highest bump (not center)
+        threshold = 0.75*np.sort(values)[::-1][1]
+        mask = values > threshold
+        # exclude center:
+        mask[np.argmax(values)] = False
+        masks.append(mask)
+
+
+    variances = [np.var(distances[mask]) for mask in masks]
+    mask = masks[np.argmin(variances)]
+    avg_dist = np.sum(distances[mask])
 
     # correct for difference in shapes
     avg_dist *= acorr.shape[0]/rate_map.shape[0] # = 1.98
-
 
     # TODO : raise warning if too big difference between points
     if plot:
@@ -664,8 +682,8 @@ def find_avg_dist(rate_map, thrsh = 0, plot=False):
 
         ax1.imshow(acorr,extent  = (0,1,0,1),origin='lower')
         ax1.scatter(*(bump_centers[:,::-1].T))
-        ax2.imshow(f,extent  = (0,1,0,1),origin='lower')
-        ax2.scatter(*(bump_centers[:,::-1].T))
+        ax1.contour(f>0, 1, colors='white',extent  = (0,1,0,1),origin='lower')
+        ax1.scatter(*(bump_centers[mask,::-1].T),s=20,c='w')
     return avg_dist
 
 
