@@ -700,3 +700,87 @@ def separation_error_func(smoothing, lpl_thrsh, rate_map):
 
     err = err*field_coverage/nf
     return err
+
+
+def get_spike_phases(signal_times, signal_phase, sptr):
+    """Returns signal phase at spike times
+
+    Parameters:
+    -----------
+    signal_times, signal_phase : quantities 1d arrays
+        signal times and phases
+
+    sptr : neo SpikeTrain
+         spiketrain containing spike times
+    
+    Returns:
+    --------
+    spike_phases : quantities 1d arrays
+        signal phase at spike times
+
+    """
+    from scipy import interpolate
+    sptr_units = sptr.units
+    time_units = signal_times.units
+    phase_units = signal_phase.units
+
+    interp_phase = interpolate.interp1d( signal_times.magnitude, 
+            signal_phase.magnitude)
+    return interp_phase(sptr.rescale(time_units)) * phase_units
+
+def get_spike_pos(x,y,t,sptr):
+    """Returns position at spike times
+    Parameters:
+    -----------
+    x,y,t : quantities 1d arrays
+        position and time data
+
+    sptr : neo SpikeTrain
+         spiketrain containing spike times
+    
+    Returns:
+    --------
+    spike_posx, spike_posy : quantities 1d arrays
+        x and y position of spikes
+    """
+    from scipy import interpolate
+    ux = x.units
+    uy = y.units
+    ut = t.units
+    interp_posx = interpolate.interp1d(t,x)
+    interp_posy = interpolate.interp1d(t,y)
+    spike_posx = interp_posx(sptr.rescale(t.units))
+    spike_posy = interp_posy(sptr.rescale(t.units))
+    return spike_posx*ux, spike_posy*uy, 
+
+def get_spike_vel(x,y,t,sptr):
+    """Returns interpolated velocities at spike times
+    Parameters:
+    -----------
+    x,y,t : quantities 1d arrays
+        position and time data
+
+    sptr : neo SpikeTrain
+         spiketrain containing spike times
+    
+    Returns:
+    --------
+    spike_velx, spike_vely : quantities 1d arrays
+        x and y position of spikes
+    """
+    from scipy import interpolate
+    ux = x.units
+    uy = y.units
+    ut = t.units
+
+    velx = np.diff(x)/np.diff(t)
+    vely = np.diff(y)/np.diff(t)
+    velx = np.insert(velx, 0, velx[0])
+    vely = np.insert(vely, 0, vely[0])
+
+    interp_velx = interpolate.interp1d(t,velx)
+    interp_vely = interpolate.interp1d(t,vely)
+
+    spike_vel_x = interp_velx(sptr.rescale(t.units))
+    spike_vel_y = interp_vely(sptr.rescale(t.units))
+    return spike_vel_x*ux/ut, spike_vel_y*uy/ut
