@@ -18,10 +18,10 @@ def speed_correlation(speed,t,sptr, stddev = 90*pq.ms):
 
     min_speed = 0.02*pq.m*pq.Hz
     max_speed = np.percentile(speed, 95 )
-
     mask = np.logical_and(speed < max_speed,speed > min_speed)
+
+    t_ = t[:speed.size][mask]
     speed = speed[mask]
-    t_ = t[:-1][mask]
 
     dt = np.average(np.diff(t_))
 

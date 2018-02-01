@@ -499,8 +499,8 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
     -------
     fields : numpy array, shape like rate_map.
         contains areas all filled with same value, corresponding to fields
-        in rate_map. The values are in range(1,nFields + 1), sorted by size of the
-        field (sum of all field values). 0 elsewhere.
+        in rate_map. The fill values are in range(1,nFields + 1), sorted by size of the
+        field (sum of all field values) with 0 elsewhere.
     n_field : int
         field count
     bump_centers : (n_field x 2) np ndarray
@@ -543,7 +543,7 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         try:
             is_field = field_values >= total_value
         except:
-            print('cutoff_func return_values doesnt want to compare:')
+            print('cutoff_func return_values doesnt compare properly:')
             raise
 
         if np.sum(is_field) == 0:
@@ -573,9 +573,32 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
     return fields, n_fields, bc
 
 
-def get_bump_centers(rate_map, labels, ret_index=False, indices=None, method='maxima',
+def get_bump_centers(rate_map, fields, ret_index=False, indices=None, method='maxima',
         units=1*pq.m):
-    """Finds center of fields at labels."""
+    """Finds center of fields at specified field labels.
+
+    Parameters
+    ----------
+    rate_map : np 2d array
+        firing rate in each bin
+    fields : np 2d array of ints
+        areas all filled with same value, corresponding to fields
+        in rate_map. See output of separate_fields
+    ret_index : bool, default False
+        return bump center values as rate_map index or as xy-pos
+    indices : int, sequence of ints or None
+        subset of fields, specifiying which fields to find bump centers of.
+        if None, all bump centers are found
+    method : string
+        method to find field centers. Valid options = ['center_of_mass',
+        'maxima','gaussian_fit']
+
+    Returns
+    -------
+    bump_centers : (n_field x 2) np ndarray
+        Coordinates of field centers, either as x-y position or as rate_map
+        index as given by ret_index
+    """
 
     from scipy import ndimage
 
@@ -583,19 +606,19 @@ def get_bump_centers(rate_map, labels, ret_index=False, indices=None, method='ma
         msg = "invalid center_method flag '%s'" % method
         raise ValueError(msg)
     if indices is None:
-        indices = np.arange(1,np.max(labels)+1)
+        indices = np.arange(1,np.max(fields)+1)
     if method == 'maxima':
-        bc = ndimage.maximum_position(rate_map, labels=labels,
+        bc = ndimage.maximum_position(rate_map, labels=fields,
                 index=indices)
     elif method == 'center_of_mass':
-        bc = ndimage.center_of_mass(rate_map, labels=labels, index=indices)
+        bc = ndimage.center_of_mass(rate_map, labels=fields, index=indices)
     elif method == 'gaussian_fit':
         from  exana.tracking.tools import fit_gauss_asym
         bc = np.zeros((len(indices),2))
         import matplotlib.pyplot as plt
         for i in indices:
             r = rate_map.copy()
-            r[labels != i] = 0
+            r[fields != i] = 0
             popt = fit_gauss_asym(r, return_data=False)
             # TODO Find out which axis is x and which is y
             bc[i-1] = (popt[2],popt[1])
@@ -952,11 +975,70 @@ def optimize_sep_fields(rate_map,step = 0.04, niter=40, T = 1.0, method = 'SLSQP
     return res
 
 
+def border_score(rate_map, fields, box_xlen = 1*pq.m, box_ylen = 1*pq.m, 
+                min_fieldsize = 250*pq.cm**2):
+    """Uses a separation of the fields in a rate map to calculate a border
+    score as described in [1]. 
 
-def average_rate(raw_rate_map, fields):
+
+    Parameters
+    ----------
+
+    rate_map : np 2d array
+        firing rate in each bin
+    fields : np 2d array of ints
+        areas all filled with same value, corresponding to fields
+        in rate_map. See output of separate_fields
+
+    References
+    ----------
+    [1]: Geoffrey W. Diehl, Olivia J. Hon, Stefan Leutgeb, Jill K. Leutgeb, https://doi.org/10.1016/j.neuron.2017.03.004
+    
     """
-    Calculates the average 
-    """
+
+    from scipy.ndimage import labeled_comprehension
+
+    # TODO: Is this specified as x or y?
+    bin_xlen = box_xlen/rate_map.shape[1]
+    bin_ylen = box_ylen/rate_map.shape[0]
+
+    # Find parts of fields next to border. Use a second to outer bins, as
+    # outer bins won't be specified as field
+    if np.all(fields == 0):
+        raise ValueError("Must have at least one field")
+    
+    inner = np.zeros(np.array(rate_map.shape)-(4,4),dtype=bool)
+    wall = np.pad(inner, 1, 'constant', constant_values=[[0,0],[1,0]])
+    wall = np.pad(wall, 1, 'constant', constant_values=0)
+    max_extent = 0
+
+    ones = np.ones_like(rate_map)
+
+    for i in range(4):
+        borders = np.logical_and(fields>0, wall)
+        extents = labeled_comprehension(input=borders, labels=fields, index=None,
+        	                        func=np.sum, out_dtype=np.int64, 
+                                        default=0)
+        max_extent = np.max([max_extent, np.max(extents)])
+            
+        # dont rotate the fourth time
+        wall = np.rot90(wall) if i < 3 else wall
+        
+    C_M = max_extent/rate_map.shape[0]
+
+    x = np.linspace(-0.5,0.5,rate_map.shape[1])
+    y = np.linspace(-0.5,0.5,rate_map.shape[0])
+    X,Y = np.meshgrid(x,y)
+
+    # create linear increasing value towards middle
+    dist_to_nearest_wall = 1-(np.abs(X+Y)+np.abs(X-Y))
+
+    d_m = np.average(dist_to_nearest_wall, weights = rate_map)
+    b = (C_M - d_m)/(C_M + d_m)
+    return b
+
+
+
 
 
 if __name__ == "__main__":
