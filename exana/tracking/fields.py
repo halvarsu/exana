@@ -620,7 +620,7 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         new[fields == size_sort[i]+1] = i+1
     fields = new
 
-    bc = get_bump_centers(rate_map,labels=fields,ret_index=ret_index,indices=indx,method=center_method,
+    bc = get_bump_centers(rate_map,fields=fields,ret_index=ret_index,indices=indx,method=center_method,
                           units=box_xlen.units)
 
     # TODO exclude fields where maxima is on the edge of the field?
@@ -686,7 +686,8 @@ def get_bump_centers(rate_map, fields, ret_index=False, indices=None, method='ma
 
 
 def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean', 
-        select_by = 'best' , plot=False,smooth_acorr=True):
+        select_by = 'best' , plot=False,smooth_acorr=True,
+        return_err=False):
     """Uses autocorrelation and separate_fields to find average distance
     between bumps. Is dependent on high gridness to get separate bumps in
     the autocorrelation
@@ -702,6 +703,11 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
         connected by "bridges" or saddles where the laplacian is negative.
     plot (optional) : bool, default False
         plot acorr and the separated acorr, with bump centers
+
+    smooth_acorr (optional) : bool, default True
+        smooth autocorrelation map before separating it to find avg_dist.
+    return_err : bool, default False
+        return error estimate in distance found with the method used
     Returns
     -------
     avg_dist : float
@@ -750,8 +756,8 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
         masks.append(mask)
 
 
-    variances = [np.var(distances[mask]) for mask in masks]
-    mask = masks[np.argmin(variances)]
+    errors = [np.std(distances[mask]) for mask in masks]
+    mask = masks[np.argmin(errors)]
     avg_dist = np.mean(distances[mask])
 
     # correct for difference in shapes
@@ -766,7 +772,10 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
         ax.scatter(*(bump_centers[:,::-1].T))
         ax.contour(f>0, 1, colors='white',extent  = (0,1,0,1),origin='lower')
         ax.scatter(*(bump_centers[mask,::-1].T),s=20,c='w')
-    return avg_dist
+    if return_err:
+        return avg_dist, np.min(errors)
+    else:
+        return avg_dist
 
 
 def fit_hex(bump_centers, avg_dist=None, plot_bumps = False, method='best'):
