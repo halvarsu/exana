@@ -535,6 +535,60 @@ def in_rate_map(rate_map, x, y, xref, yref):
     yidx = np.argmin(ydiff)
     return rate_map[yidx, xidx]
 
+def gaussian2D(pos, amplitude, xc, yc, sigma):
+    x,y = pos
+    g = amplitude*np.exp( - (((x-xc)**2 + (y-yc)**2)/(2*sigma**2)))
+    return g.ravel()
+
+
+def fit_gauss(data, p0 = None, asym = False, return_data=True):
+    """Fits an asymmetric 2D gauss function to the given data set, with optional guess
+    parameters. Optimizes amplitude, center coordinates, sigmax, sigmay and
+    angle. If no guess parameters, initializes with a thin gauss bell
+    centered at the data maxima
+
+    Parameters
+    -----------
+    data        : 2D np array
+    p0 (optional): arraylike
+                  initial parameters [amplitude,x_center,y_center,sigma]
+    return_data : bool
+
+
+    Returns
+    --------
+    params      : tuple of params: (amp,xc,yc,sigma)
+    (if return_data) data_fitted : 2D np array
+                                   the fitted gauss data
+    """
+    from scipy.optimize import curve_fit
+    # Create x and y indices
+    sx, sy = data.shape
+    xmin, xmax = 0, 1
+    ymin, ymax = 0, 1
+    x = np.linspace(xmin, xmax, sx)
+    y = np.linspace(ymin, ymax, sy)
+    x, y = np.meshgrid(x, y)
+
+    if p0 is None:
+        # initial guesses, use small gaussian at maxima as initial guess
+        ia =     np.max(data)                                # amplitude
+        index = np.unravel_index(np.argmax(data), (sx, sy))  # center
+        ix, iy = x[index], y[index]
+        isig =  0.01
+        p0 = [ia, ix, iy, isig]
+    if asym:
+        p0 += [isig, 0]
+        popt, pcov = curve_fit(gaussian2D_asym, (x, y), data.ravel(), p0=p0)
+    else:
+        popt, pcov = curve_fit(gaussian2D, (x, y), data.ravel(), p0=p0)
+
+    # TODO : Add test for pcov
+    if return_data:
+        data_fitted = gaussian2D_asym((x, y), *popt) if asym else gaussian2D((x, y), *popt)
+        return popt, data_fitted.reshape(sx,sy)
+    else:
+        return popt
 
 def gaussian2D_asym(pos, amplitude, xc, yc, sigma_x, sigma_y, theta):
     x,y = pos
@@ -784,3 +838,49 @@ def get_spike_vel(x,y,t,sptr):
     spike_vel_x = interp_velx(sptr.rescale(t.units))
     spike_vel_y = interp_vely(sptr.rescale(t.units))
     return spike_vel_x*ux/ut, spike_vel_y*uy/ut
+
+
+def in_field(x,y,t,sptr,field, box_xlen=1*pq.m, box_ylen=1*pq.m):
+    """Returns which field each (x,y,t)-position and each spike and is in.
+
+    Parameters:
+    -----------
+    x, y, t: numpy arrays
+        len(x) == len(y) == len(t)
+    sptr: neo Spiketrain or array of spike times
+        
+    field : numpy nd array 
+        labeled fields, where each field is defined by an area separated by
+        zeros. The fields are labeled with indices from [1:].
+
+    Returns:
+    --------
+    indices : numpy array
+        field-labeled indices for position and times, length = len(x)
+    spike_indices : numpy array
+        field-labeled indices for spike times, length = len(sptr)
+    """
+
+    if len(x)!= len(y):
+        raise ValueError('x and y must have same length')
+
+    sx,sy = field.shape
+    dx = box_xlen/sx
+    dy = box_ylen/sy
+    x_bins = dx + np.arange(0,box_xlen.magnitude,dx.magnitude) * x[0].units 
+    y_bins = dy + np.arange(0,box_ylen.magnitude,dy.magnitude) * y[0].units 
+    ix = np.digitize(x,x_bins) 
+    iy = np.digitize(y,y_bins)
+
+    # cheap fix for boundaries:
+    ix[ix==sx] = sx-1
+    iy[iy==sy] = sy-1
+
+    field_indices = np.array(field[iy,ix])
+
+    from scipy.interpolate import interp1d
+    index_interp = interp1d(t, field_indices, kind='nearest')
+    spike_indices = index_interp(sptr).astype(np.int64)
+
+    return field_indices, spike_indices
+
