@@ -61,12 +61,24 @@ def spatial_rate_map(x, y, t, sptr, binsize=0.01*pq.m, box_xlen=1*pq.m,
         raise ValueError('the remainder should be zero i.e. the ' +
                          'box length should be an exact multiple ' +
                          'of the binsize')
+
+    n_bins_x = dec(float(box_xlen)*decimals) // dec(float(binsize)*decimals)
+    n_bins_y = dec(float(box_ylen)*decimals) // dec(float(binsize)*decimals)
+
     is_quantities([x, y, t], 'vector')
     is_quantities(binsize, 'scalar')
     t = t.rescale('s')
     box_xlen = box_xlen.rescale('m').magnitude
     box_ylen = box_ylen.rescale('m').magnitude
     binsize = binsize.rescale('m').magnitude
+
+    old_method = True
+    if not old_method:
+        from . import get_spike_pos
+        spx,spy = get_spike_pos(x,y,t,sptr)
+        spx = spx.rescale('m').magnitude
+        spy = spy.rescale('m').magnitude
+
     x = x.rescale('m').magnitude
     y = y.rescale('m').magnitude
 
@@ -79,21 +91,30 @@ def spatial_rate_map(x, y, t, sptr, binsize=0.01*pq.m, box_xlen=1*pq.m,
     ix = np.digitize(x, xbins, right=False)
     iy = np.digitize(y, ybins, right=False)
 
-    # cheap fix for boundaries:
-    sx = xbins.size 
-    sy = ybins.size
-    ix[ix==sx] = sx-1
-    iy[iy==sy] = sy-1
+    if old_method:
+        # cheap fix for boundaries:
+        sx = xbins.size 
+        sy = ybins.size
+        ix[ix==sx] = sx-1
+        iy[iy==sy] = sy-1
 
-    spike_pos = np.zeros((xbins.size, ybins.size))
-    time_pos  = np.zeros((xbins.size, ybins.size))
-    for n in range(len(x)):
-        spike_pos[ix[n], iy[n]] += spikes_in_bin[n]
-        time_pos[ix[n], iy[n]] += time_in_bin[n]
+        spike_pos = np.zeros((xbins.size, ybins.size))
+        time_pos  = np.zeros((xbins.size, ybins.size))
+        for n in range(len(x)):
+            spike_pos[ix[n], iy[n]] += spikes_in_bin[n]
+            time_pos[ix[n], iy[n]] += time_in_bin[n]
 
-    # correct for shifting of map
-    spike_pos = spike_pos[1:, 1:]
-    time_pos = time_pos[1:, 1:]
+        # correct for shifting of map
+        spike_pos = spike_pos[1:, 1:]
+        time_pos = time_pos[1:, 1:]
+    else:
+        dt = np.gradient(t)
+        box_range = [(0,box_xlen),(0,box_ylen)]
+        time_pos,_,_  = np.histogram2d(x, y, bins=[n_bins_x, n_bins_y], 
+                                               range=box_range,weights = dt)
+        spike_pos,_,_ = np.histogram2d(spx, spy, bins=[n_bins_x, n_bins_y],
+                                               range=box_range)
+
     if convolve and convolve_spikes_and_time:
         from astropy.convolution import Gaussian2DKernel, convolve_fft
         csize = (box_xlen / binsize) * smoothing
@@ -117,7 +138,7 @@ def spatial_rate_map(x, y, t, sptr, binsize=0.01*pq.m, box_xlen=1*pq.m,
     if return_bins:
         return rate.T, xbins, ybins
     else:
-        return rate.T
+        return rate.T, spike_pos.T, time_pos.T
 
 
 def gridness(rate_map, box_xlen, box_ylen, return_acorr=False,
@@ -527,7 +548,7 @@ def spatial_rate_map_1d(x, t, sptr,
 
 def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         cutoff_method='none', box_xlen=1*pq.m,
-        box_ylen=1*pq.m,ret_index=False):
+        box_ylen=1*pq.m,ret_index=False, minimum_size=0*pq.cm**2):
     """Separates fields using the laplacian to identify fields separated by
     a negative second derivative.
 
@@ -548,6 +569,8 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         string_options = ['median', 'mean','none'].
     index : bool, default False
         return bump center values as index or xy-pos
+    minimum_size : area quantity
+        minimum size of field to be included
 
     Returns
     -------
@@ -571,6 +594,9 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
             raise ValueError(msg)
     else:
         cutoff_func = cutoff_method
+    from exana.misc.tools import is_quantities
+
+    is_quantities(minimum_size, 'scalar')
 
     from scipy import ndimage
 
@@ -582,7 +608,7 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
     fields, n_fields = ndimage.label(l)
 
     # index 0 is the background
-    indx = np.arange(1,n_fields+1)
+    indx = 1 + np.arange(n_fields)
 
     # Use cutoff method to remove unwanted fields
     if cutoff_method != 'none':
@@ -611,13 +637,26 @@ def separate_fields(rate_map, laplace_thrsh = 0, center_method = 'maxima',
         n_fields = ndimage.label(fields, output=fields)
         indx = np.arange(1,n_fields + 1)
 
+
     # Sort by largest mean
-    sizes = ndimage.labeled_comprehension(rate_map, fields, indx,
-            np.mean, float, 0)
-    size_sort = np.argsort(sizes)[::-1]
+    rate_means = ndimage.labeled_comprehension(rate_map, fields, indx,
+            np.mean, np.float64, 0)
+    sort = np.argsort(rate_means)[::-1]
+
+    if minimum_size.magnitude > 0:
+        bins_in_field = ndimage.labeled_comprehension(fields, fields, indx[sort],
+                                              np.size, np.int64, 0)
+        sqcm_per_bin = (box_xlen*box_ylen).rescale('cm**2').magnitude/rate_map.size
+        min_bins = minimum_size.rescale('cm**2').magnitude/sqcm_per_bin
+        valid = bins_in_field > min_bins
+
+        sort = sort[valid]
+        n_fields = sort.size
+
+    # new rate map with fields > min_size, sorted
     new = np.zeros_like(fields)
-    for i in np.arange(n_fields):
-        new[fields == size_sort[i]+1] = i+1
+    for i in range(n_fields):
+        new[fields == sort[i]+1] = i+1
     fields = new
 
     bc = get_bump_centers(rate_map,fields=fields,ret_index=ret_index,indices=indx,method=center_method,
@@ -686,7 +725,7 @@ def get_bump_centers(rate_map, fields, ret_index=False, indices=None, method='ma
 
 
 def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean', 
-        select_by = 'best' , plot=False,smooth_acorr=True,
+        select_by = 'best' , plot=False,smooth_acorr=1,
         return_err=False):
     """Uses autocorrelation and separate_fields to find average distance
     between bumps. Is dependent on high gridness to get separate bumps in
@@ -704,8 +743,9 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
     plot (optional) : bool, default False
         plot acorr and the separated acorr, with bump centers
 
-    smooth_acorr (optional) : bool, default True
-        smooth autocorrelation map before separating it to find avg_dist.
+    smooth_acorr (optional) : int, default 1
+        standard deviation of kernel to smooth autocorrelation map before
+        separating it to find avg_dist. 0 gives no smoothing
     return_err : bool, default False
         return error estimate in distance found with the method used
     Returns
@@ -716,35 +756,37 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
 
     from scipy.ndimage import maximum_position
     from exana.misc.tools import fftcorrelate2d
+    if select_by not in ['value','closest','best','two_closest']:
+        raise ValueError('Invalid select_by flag: %s' %select_by)
 
     # autocorrelate. Returns array (2x - 1) the size of rate_map
     acorr = fftcorrelate2d(rate_map,rate_map, mode = 'full', normalize = True)
 
     if smooth_acorr:
         from astropy.convolution import Gaussian2DKernel, convolve_fft
-        kernel = Gaussian2DKernel(1)
+        kernel = Gaussian2DKernel(smooth_acorr)
         acorr = convolve_fft(acorr, kernel)  
     
-    #acorr[acorr<0] = 0 # TODO Fix this
     f, nf, bump_indices = separate_fields(acorr,laplace_thrsh=thrsh,
             center_method='maxima',cutoff_method=cutoff_method, 
             ret_index = True)
-                                         # TODO Find a way to find valid value for
-                                         # thrsh, or remove.
 
     bump_centers = np.array((bump_indices + np.array((0.5,0.5)))/acorr.shape)
 
-    # find dists from center in (autocorrelation)relative units (from 0 to 1)
+    # find dists from center in (autocorrelation-)relative units (from 0 to 1)
     distances = np.linalg.norm(bump_centers - (0.5,0.5), axis = 1)
 
+    # sort by distance
     dist_sort = np.argsort(distances)
     distances = distances[dist_sort]
     bump_centers = bump_centers[dist_sort]
     bump_indices = bump_indices[dist_sort]
 
     masks = []
-    # use maximum 6 closest values except center value
+    if (select_by == 'two_closest'):
+        masks.append(slice(1,3))
     if (select_by == 'closest') or (select_by == 'best'):
+    # use maximum 6 closest values except center value
         masks.append(slice(1,5))
     if (select_by == 'value') or (select_by == 'best'):
         values = acorr[bump_indices.T[0],bump_indices.T[1]]
@@ -776,6 +818,90 @@ def find_avg_dist(rate_map, thrsh = 0, cutoff_method = 'mean',
         return avg_dist, np.min(errors)
     else:
         return avg_dist
+
+def field_size(fields, max_wall_extent=0.0, min_no_bins = 0, return_fields = False):
+    """Finds average size of fields in number of bins.
+    
+    Parameters
+    ----------
+    fields : nxn numpy array
+    max_wall_extent : float [0,1]
+        if nonzero, exclude fields with ratio of bins next to edge less
+        than this threshold from calculation.
+    min_no_bins : int
+        minimum number of bins in field
+
+    Returns
+    -------
+    size : float
+    
+    - if return_fields == True:
+    new_fields : np array
+        copy of fields without excluded
+    """
+
+    
+    from scipy.ndimage import labeled_comprehension
+    indx = np.arange(np.max(fields))+1
+
+
+    sizes = labeled_comprehension(fields,fields, indx, np.size, np.int64, 0)
+
+    wall = np.pad(np.zeros(fields.shape-np.array([2,2]),dtype=bool), 
+              1, 'constant', constant_values=True)
+    wall_extent = labeled_comprehension(wall, fields, indx, np.sum, int, 0)
+
+    valid = np.logical_and((wall_extent/sizes) < max_wall_extent,
+                           sizes > min_no_bins)
+
+    sizes = sizes[valid]
+
+    # median_size = np.median(sizes)
+    average_size = np.average(sizes)
+    if return_fields:
+        fnew = fields.copy()
+        for i in indx:
+            if not valid[i-1]:
+                fnew[fnew==i] = 0
+        return average_size, fields
+    else:
+        return average_size
+
+
+def field_rates(x,y,t,sptr, fields, min_no_bins = 0):
+    """
+    Calculates field rates, in and out of fields, for fields larger that
+    min_no_bins. Calculates using number of bins divided by time spent.
+
+    Parameters:
+    -----------
+    x,y,t
+
+    sptr
+    fields
+    min_no_bins : minimum number of bins in field to include in infield.
+
+    """
+    
+    from .tools import in_field
+    from scipy.ndimage import labeled_comprehension
+
+    pos_indices, sptr_indices = in_field(x,y,t,sptr,fields)
+
+    indx = np.unique(fields)
+    no_bins = labeled_comprehension(fields, fields, indx, np.size, np.int64, 0)
+    out_field = np.concatenate(([True],no_bins < min_no_bins))
+    print(out_field)
+    
+    # exclude fields without spikes
+    spikes_per_field = np.bincount(sptr_indices)
+    dt = np.diff(t)
+    times_per_field = np.bincount(pos_indices[:-1], weights = dt)
+    rates = spikes_per_field/times_per_field
+    out_field = np.average(rates[out_field])
+    in_fields = rates[~out_field]
+    return out_field, in_fields
+
 
 
 def fit_hex(bump_centers, avg_dist=None, plot_bumps = False, method='best'):
