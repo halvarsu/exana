@@ -138,7 +138,7 @@ def spatial_rate_map(x, y, t, sptr, binsize=0.01*pq.m, box_xlen=1*pq.m,
     if return_bins:
         return rate.T, xbins, ybins
     else:
-        return rate.T, spike_pos.T, time_pos.T
+        return rate.T
 
 
 def gridness(rate_map, box_xlen, box_ylen, return_acorr=False,
